@@ -82,18 +82,25 @@ public static class LocalVariables
         // 'this' param
         if (!method.IsStatic && method.Locals.Count > 0)
         {
-            var thisOperand = (Register)method.ParameterOperands[0];
-            var thisLocal = method.Locals.FirstOrDefault(l => l.Register.Number == thisOperand.Number && l.Register.Version == -1);
-
-            if (thisLocal != null)
+            if (method.ParameterOperands.Count == 0)
             {
-                thisLocal.Name = "this";
-                thisLocal.IsThis = true;
-                paramLocals.Add(thisLocal);
+                method.AddWarning("'this' parameter not found");
             }
             else
             {
-                method.AddWarning($"'this' local not found (operand: {thisOperand})");
+                var thisOperand = (Register)method.ParameterOperands[0];
+                var thisLocal = method.Locals.FirstOrDefault(l => l.Register.Number == thisOperand.Number && l.Register.Version == -1);
+
+                if (thisLocal != null)
+                {
+                    thisLocal.Name = "this";
+                    thisLocal.IsThis = true;
+                    paramLocals.Add(thisLocal);
+                }
+                else
+                {
+                    method.AddWarning($"'this' local not found (operand: {thisOperand})");
+                }
             }
         }
 
