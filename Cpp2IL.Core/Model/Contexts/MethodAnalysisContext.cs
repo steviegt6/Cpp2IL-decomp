@@ -85,6 +85,10 @@ public class MethodAnalysisContext : HasGenericParameters, IMethodInfoProvider
 
     public bool IsVirtual => (Attributes & MethodAttributes.Virtual) != 0;
 
+    public bool IsAbstract => (Attributes & MethodAttributes.Abstract) != 0;
+
+    public bool IsNewSlot => (Attributes & MethodAttributes.NewSlot) != 0;
+
     protected override int CustomAttributeIndex => Definition?.customAttributeIndex ?? throw new("Subclasses of MethodAnalysisContext should override CustomAttributeIndex if they have custom attributes");
 
     public override AssemblyAnalysisContext CustomAttributeAssembly => DeclaringType?.DeclaringAssembly ?? throw new("Subclasses of MethodAnalysisContext should override CustomAttributeAssembly if they have custom attributes");
@@ -99,13 +103,21 @@ public class MethodAnalysisContext : HasGenericParameters, IMethodInfoProvider
 
     public virtual MethodAttributes? OverrideAttributes { get; set; }
 
-    public MethodAttributes Attributes => OverrideAttributes ?? DefaultAttributes;
+    public MethodAttributes Attributes
+    {
+        get => OverrideAttributes ?? DefaultAttributes;
+        set => OverrideAttributes = value;
+    }
 
     public virtual MethodImplAttributes DefaultImplAttributes => Definition?.MethodImplAttributes ?? throw new($"Subclasses of MethodAnalysisContext should override {nameof(DefaultImplAttributes)}");
 
     public virtual MethodImplAttributes? OverrideImplAttributes { get; set; }
 
-    public MethodImplAttributes ImplAttributes => OverrideImplAttributes ?? DefaultImplAttributes;
+    public MethodImplAttributes ImplAttributes
+    {
+        get => OverrideImplAttributes ?? DefaultImplAttributes;
+        set => OverrideImplAttributes = value;
+    }
 
     public MethodAttributes Visibility
     {
@@ -115,7 +127,7 @@ public class MethodAnalysisContext : HasGenericParameters, IMethodInfoProvider
         }
         set
         {
-            OverrideAttributes = (Attributes & ~MethodAttributes.MemberAccessMask) | (value & MethodAttributes.MemberAccessMask);
+            Attributes = (Attributes & ~MethodAttributes.MemberAccessMask) | (value & MethodAttributes.MemberAccessMask);
         }
     }
 
@@ -137,96 +149,133 @@ public class MethodAnalysisContext : HasGenericParameters, IMethodInfoProvider
     public TypeAnalysisContext? OverrideReturnType { get; set; }
 
     //TODO Support custom attributes on return types (v31 feature)
-    public TypeAnalysisContext ReturnType => OverrideReturnType ?? DefaultReturnType;
+    public TypeAnalysisContext ReturnType
+    {
+        get => OverrideReturnType ?? DefaultReturnType;
+        set => OverrideReturnType = value;
+    }
 
     protected Memory<byte>? rawMethodBody;
 
-    public MethodAnalysisContext? BaseMethod => Overrides.FirstOrDefault(m => m.DeclaringType?.IsInterface is false);
-
-    /// <summary>
-    /// The set of methods which this method overrides.
-    /// </summary>
-    public virtual IEnumerable<MethodAnalysisContext> Overrides
+    public MethodAnalysisContext? BaseMethod
     {
         get
         {
             if (Definition == null)
-                return [];
+                return null;
 
-            var declaringTypeDefinition = DeclaringType?.Definition;
-            if (declaringTypeDefinition == null)
-                return [];
-
-            var vtable = declaringTypeDefinition.VTable;
+            var vtable = DeclaringType?.Definition?.VTable;
             if (vtable == null)
-                return [];
+                return null;
 
-            return GetOverriddenMethods(declaringTypeDefinition, vtable);
-
-            bool TryGetMethodForSlot(TypeAnalysisContext declaringType, int slot, [NotNullWhen(true)] out MethodAnalysisContext? method)
+            for (var i = 0; i < vtable.Length; ++i)
             {
-                if (declaringType is GenericInstanceTypeAnalysisContext genericInstanceType)
-                {
-                    var genericMethod = genericInstanceType.GenericType.Methods.FirstOrDefault(m => m.Slot == slot);
-                    if (genericMethod is not null)
-                    {
-                        method = new ConcreteGenericMethodAnalysisContext(genericMethod, genericInstanceType.GenericArguments, []);
-                        return true;
-                    }
-                }
-                else
-                {
-                    var baseMethod = declaringType.Methods.FirstOrDefault(m => m.Slot == slot);
-                    if (baseMethod is not null)
-                    {
-                        method = baseMethod;
-                        return true;
-                    }
-                }
+                var vtableEntry = vtable[i];
+                if (vtableEntry is null or { Type: not MetadataUsageType.MethodDef } || vtableEntry.AsMethod() != Definition)
+                    continue;
 
-                method = null;
-                return false;
+                var baseType = DeclaringType?.DefaultBaseType;
+                while (baseType is not null)
+                {
+                    if (TryGetMethodForSlot(baseType, i, out var method))
+                    {
+                        return method;
+                    }
+                    baseType = baseType.DefaultBaseType;
+                }
             }
+            return null;
+        }
+    }
 
-            IEnumerable<MethodAnalysisContext> GetOverriddenMethods(Il2CppTypeDefinition declaringTypeDefinition, MetadataUsage?[] vtable)
+    private List<MethodAnalysisContext>? _overrides;
+
+    /// <summary>
+    /// The set of interface methods which this method explicitly overrides.
+    /// </summary>
+    public List<MethodAnalysisContext> Overrides
+    {
+        get
+        {
+            // Lazy load the overrides
+            return _overrides ??= GetOverrides().ToList();
+        }
+    }
+
+    private IEnumerable<MethodAnalysisContext> GetOverrides()
+    {
+        if (Definition == null)
+            return [];
+
+        var declaringTypeDefinition = DeclaringType?.Definition;
+        if (declaringTypeDefinition == null)
+            return [];
+
+        var vtable = declaringTypeDefinition.VTable;
+        if (vtable == null)
+            return [];
+
+        return GetOverriddenMethods(declaringTypeDefinition, vtable);
+
+        IEnumerable<MethodAnalysisContext> GetOverriddenMethods(Il2CppTypeDefinition declaringTypeDefinition, MetadataUsage?[] vtable)
+        {
+            for (var i = 0; i < vtable.Length; ++i)
             {
-                for (var i = 0; i < vtable.Length; ++i)
+                var vtableEntry = vtable[i];
+                if (vtableEntry is null or { Type: not MetadataUsageType.MethodDef })
+                    continue;
+
+                if (vtableEntry.AsMethod() != Definition)
+                    continue;
+
+                // Interface inheritance
+                foreach (var interfaceOffset in declaringTypeDefinition.InterfaceOffsets)
                 {
-                    var vtableEntry = vtable[i];
-                    if (vtableEntry is null or { Type: not MetadataUsageType.MethodDef })
-                        continue;
-
-                    if (vtableEntry.AsMethod() != Definition)
-                        continue;
-
-                    // Normal inheritance
-                    var baseType = DeclaringType?.BaseType;
-                    while (baseType is not null)
+                    if (i >= interfaceOffset.offset)
                     {
-                        if (TryGetMethodForSlot(baseType, i, out var method))
+                        var interfaceTypeContext = interfaceOffset.Type.ToContext(CustomAttributeAssembly);
+                        if (interfaceTypeContext != null && TryGetMethodForSlot(interfaceTypeContext, i - interfaceOffset.offset, out var method))
                         {
                             yield return method;
-                            break; // We only want direct overrides, not the entire inheritance chain.
-                        }
-                        baseType = baseType.BaseType;
-                    }
-
-                    // Interface inheritance
-                    foreach (var interfaceOffset in declaringTypeDefinition.InterfaceOffsets)
-                    {
-                        if (i >= interfaceOffset.offset)
-                        {
-                            var interfaceTypeContext = interfaceOffset.Type.ToContext(CustomAttributeAssembly);
-                            if (interfaceTypeContext != null && TryGetMethodForSlot(interfaceTypeContext, i - interfaceOffset.offset, out var method))
-                            {
-                                yield return method;
-                            }
                         }
                     }
                 }
             }
         }
     }
+
+    private static bool TryGetMethodForSlot(TypeAnalysisContext declaringType, int slot, [NotNullWhen(true)] out MethodAnalysisContext? method)
+    {
+        if (declaringType is GenericInstanceTypeAnalysisContext genericInstanceType)
+        {
+            var genericMethod = genericInstanceType.GenericType.Methods.FirstOrDefault(m => m.Slot == slot);
+            if (genericMethod is not null)
+            {
+                method = new ConcreteGenericMethodAnalysisContext(genericMethod, genericInstanceType.GenericArguments, []);
+                return true;
+            }
+        }
+        else
+        {
+            var baseMethod = declaringType.Methods.FirstOrDefault(m => m.Slot == slot);
+            if (baseMethod is not null)
+            {
+                method = baseMethod;
+                return true;
+            }
+        }
+
+        method = null;
+        return false;
+    }
+
+    /*
+    private static readonly List<IBlockProcessor> blockProcessors =
+    [
+        new MetadataProcessor(),
+        new CallProcessor()
+    ];
+    */
 
     public MethodAnalysisContext(Il2CppMethodDefinition? definition, TypeAnalysisContext parent) : base(definition?.token ?? 0, parent.AppContext)
     {

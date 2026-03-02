@@ -40,11 +40,11 @@
 
     <ItemGroup>
         <!--Needed for DLL output-->
-        <PackageReference Include="AsmResolver.DotNet" Version="6.0.0-beta.4" />
-        <PackageReference Include="AssetRipper.CIL" Version="1.2.0" />
+        <PackageReference Include="AsmResolver.DotNet" Version="6.0.0-beta.6" />
+        <PackageReference Include="AssetRipper.CIL" Version="1.3.0" />
         
         <!--For ARM64 dissassembly-->
-        <PackageReference Include="Disarm" Version="2022.1.0-master.57" />
+        <PackageReference Include="Disarm" Version="2022.1.0-master.99" />
 
         <!--For X86/X64 disassembly-->
         <PackageReference Include="Iced" Version="1.21.0" />
@@ -58,16 +58,15 @@
         <PackageReference Include="PolySharp" Version="1.15.0" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
     </ItemGroup>
 
-    <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
-        <!--Supplementary packages to provide modern runtime features on netstandard2-->
-        <PackageReference Include="System.ValueTuple" Version="4.5.0" />
-    </ItemGroup>
-
     <ItemGroup>
         <ProjectReference Include="..\LibCpp2IL\LibCpp2IL.csproj" />
         
         <!--Future: Consider moving to its own project and moving the impl in cpp2il to a plugin-->
         <ProjectReference Include="..\StableNameDotNet\StableNameDotNet.csproj" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+      <PackageReference Include="System.ValueTuple" Version="4.6.1" />
     </ItemGroup>
 
 </Project>

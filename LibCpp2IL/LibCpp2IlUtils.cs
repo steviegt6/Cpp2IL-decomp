@@ -64,21 +64,19 @@ public static class LibCpp2ILUtils
             }
         }
 
-        if (typeDef.DeclaringTypeIndex != -1)
+        if (typeDef.DeclaringTypeIndex.IsNonNull)
         {
             ret += GetTypeName(metadata, cppAssembly, cppAssembly.GetType(typeDef.DeclaringTypeIndex)) + ".";
         }
 
         ret += metadata.GetStringFromIndex(typeDef.NameIndex);
         var names = new List<string>();
-        if (typeDef.GenericContainerIndex < 0) return ret;
-
-        var genericContainer = metadata.genericContainers[typeDef.GenericContainerIndex];
-        for (var i = 0; i < genericContainer.genericParameterCount; i++)
+        if (typeDef.GenericContainer is not {} genericContainer) 
+            return ret;
+        
+        foreach (var parameter in genericContainer.GenericParameters)
         {
-            var genericParameterIndex = genericContainer.genericParameterStart + i;
-            var param = metadata.genericParameters[genericParameterIndex];
-            names.Add(metadata.GetStringFromIndex(param.nameIndex));
+            names.Add(metadata.GetStringFromIndex(parameter.nameIndex));
         }
 
         ret = ret.Replace($"`{genericContainer.genericParameterCount}", "");
@@ -117,7 +115,7 @@ public static class LibCpp2ILUtils
             case Il2CppTypeEnum.IL2CPP_TYPE_CLASS:
             case Il2CppTypeEnum.IL2CPP_TYPE_VALUETYPE:
             {
-                var typeDef = metadata.typeDefs[type.Data.ClassIndex];
+                var typeDef = type.AsClass();
                 ret = string.Empty;
 
                 ret += GetTypeName(metadata, cppAssembly, typeDef, fullName);
@@ -136,7 +134,7 @@ public static class LibCpp2ILUtils
             case Il2CppTypeEnum.IL2CPP_TYPE_VAR:
             case Il2CppTypeEnum.IL2CPP_TYPE_MVAR:
             {
-                var param = metadata.genericParameters[type.Data.GenericParameterIndex];
+                var param = metadata.GetGenericParameterFromIndex(type.Data.GenericParameterIndex);
                 ret = metadata.GetStringFromIndex(param.nameIndex);
                 break;
             }
@@ -167,12 +165,12 @@ public static class LibCpp2ILUtils
         return ret;
     }
 
-    internal static object? GetDefaultValue(int dataIndex, int typeIndex)
+    internal static object? GetDefaultValue(Il2CppVariableWidthIndex<Il2CppDefaultValueDataDummy> dataIndex, Il2CppVariableWidthIndex<Il2CppType> typeIndex)
     {
         var metadata = LibCpp2IlMain.TheMetadata!;
         var theDll = LibCpp2IlMain.Binary!;
 
-        if (dataIndex == -1)
+        if (dataIndex.IsNull)
             return null; //Literally null.
 
         var pointer = metadata.GetDefaultValueFromIndex(dataIndex);
@@ -289,7 +287,7 @@ public static class LibCpp2ILUtils
                 //"normal" type
                 return new Il2CppTypeReflectionData
                 {
-                    baseType = LibCpp2IlMain.TheMetadata.typeDefs[forWhat.Data.ClassIndex], genericParams = [], isType = true, isGenericType = false,
+                    baseType = forWhat.AsClass(), genericParams = [], isType = true, isGenericType = false,
                 };
             case Il2CppTypeEnum.IL2CPP_TYPE_GENERICINST:
             {
@@ -297,15 +295,7 @@ public static class LibCpp2ILUtils
                 var genericClass = LibCpp2IlMain.Binary.ReadReadableAtVirtualAddress<Il2CppGenericClass>(forWhat.Data.GenericClass);
 
                 //CHANGED IN v27: typeDefinitionIndex is a ptr to the type in the file.
-                Il2CppTypeDefinition typeDefinition;
-                if (LibCpp2IlMain.MetadataVersion < 27f)
-                    typeDefinition = LibCpp2IlMain.TheMetadata.typeDefs[genericClass.TypeDefinitionIndex];
-                else
-                {
-                    //This is slightly annoying, because we will have already read this type, but we have to re-read it. TODO FUTURE: Make a mapping of type definition addr => type def?
-                    var type = LibCpp2IlMain.Binary.ReadReadableAtVirtualAddress<Il2CppType>((ulong)genericClass.TypeDefinitionIndex);
-                    typeDefinition = LibCpp2IlMain.TheMetadata.typeDefs[type.Data.ClassIndex];
-                }
+                var typeDefinition = genericClass.TypeDefinition;
 
                 var genericInst = genericClass.Context.ClassInst;
 
@@ -321,7 +311,7 @@ public static class LibCpp2ILUtils
             case Il2CppTypeEnum.IL2CPP_TYPE_VAR:
             case Il2CppTypeEnum.IL2CPP_TYPE_MVAR:
             {
-                var param = LibCpp2IlMain.TheMetadata.genericParameters[forWhat.Data.GenericParameterIndex];
+                var param = LibCpp2IlMain.TheMetadata.GetGenericParameterFromIndex(forWhat.Data.GenericParameterIndex);
                 var genericName = LibCpp2IlMain.TheMetadata.GetStringFromIndex(param.nameIndex);
 
                 return new()

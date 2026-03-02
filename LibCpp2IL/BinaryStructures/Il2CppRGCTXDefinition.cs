@@ -1,4 +1,5 @@
-﻿using LibCpp2IL.Reflection;
+using LibCpp2IL.Metadata;
+using LibCpp2IL.Reflection;
 
 namespace LibCpp2IL.BinaryStructures;
 
@@ -7,13 +8,13 @@ public class Il2CppRGCTXDefinition : ReadableClass
     public Il2CppRGCTXDataType type;
     public int _rawIndex;
 
-    public int MethodIndex => type == Il2CppRGCTXDataType.IL2CPP_RGCTX_DATA_CONSTRAINED ? _constrainedData.MethodIndex : _defData.MethodIndex;
+    public int MethodIndex => _defData?.MethodIndex ?? _constrainedData!.MethodIndex;
 
-    public int TypeIndex => type == Il2CppRGCTXDataType.IL2CPP_RGCTX_DATA_CONSTRAINED ? _constrainedData.TypeIndex : _defData.TypeIndex;
+    public int TypeIndex => _defData?.TypeIndex ?? _constrainedData!.TypeIndex;
 
     public Il2CppMethodSpec? MethodSpec => LibCpp2IlMain.Binary?.GetMethodSpec(MethodIndex);
 
-    public Il2CppTypeReflectionData? Type => LibCpp2ILUtils.GetTypeReflectionData(LibCpp2IlMain.Binary!.GetType(TypeIndex));
+    public Il2CppTypeReflectionData? Type => LibCpp2ILUtils.GetTypeReflectionData(LibCpp2IlMain.Binary!.GetType(Il2CppVariableWidthIndex<Il2CppType>.MakeTemporaryForFixedWidthUsage(TypeIndex)));
 
 
     public class Il2CppRGCTXDefinitionData : ReadableClass
@@ -41,9 +42,9 @@ public class Il2CppRGCTXDefinition : ReadableClass
         }
     }
     [Version(Min = 27.2f)]
-    private Il2CppRGCTXConstrainedData _constrainedData;
+    private Il2CppRGCTXConstrainedData? _constrainedData;
 
-    private Il2CppRGCTXDefinitionData _defData;
+    private Il2CppRGCTXDefinitionData? _defData;
     public override void Read(ClassReadingBinaryReader reader)
     {
         type = IsLessThan(29) ? (Il2CppRGCTXDataType)reader.ReadInt32() : (Il2CppRGCTXDataType)reader.ReadInt64();

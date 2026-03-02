@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using AssetRipper.Primitives;
@@ -196,6 +197,15 @@ public class ApplicationAnalysisContext : ContextWithDataStorage
     public MethodAnalysisContext? ResolveContextForMethod(Il2CppMethodDefinition? methodDefinition)
     {
         return ResolveContextForType(methodDefinition?.DeclaringType)?.Methods.FirstOrDefault(m => m.Definition == methodDefinition);
+    }
+
+    [return: NotNullIfNotNull(nameof(methodReference))]
+    public ConcreteGenericMethodAnalysisContext? ResolveContextForMethod(Cpp2IlMethodRef? methodReference)
+    {
+        if(methodReference == null)
+            return null;
+            
+        return ConcreteGenericMethodsByRef.TryGetValue(methodReference, out var context) ? context : new(methodReference, this);
     }
 
     public FieldAnalysisContext? ResolveContextForField(Il2CppFieldDefinition? field)

@@ -44,7 +44,11 @@ public class ParameterAnalysisContext : HasCustomAttributesAndName, IParameterIn
     /// <summary>
     /// The ParameterAttributes of this parameter.
     /// </summary>
-    public ParameterAttributes Attributes => OverrideAttributes ?? DefaultAttributes;
+    public ParameterAttributes Attributes
+    {
+        get => OverrideAttributes ?? DefaultAttributes;
+        set => OverrideAttributes = value;
+    }
 
     /// <summary>
     /// True if this parameter is passed by reference.
@@ -60,7 +64,11 @@ public class ParameterAnalysisContext : HasCustomAttributesAndName, IParameterIn
 
     public TypeAnalysisContext? OverrideParameterType { get; set; }
 
-    public virtual TypeAnalysisContext ParameterType => OverrideParameterType ?? DefaultParameterType;
+    public TypeAnalysisContext ParameterType
+    {
+        get => OverrideParameterType ?? DefaultParameterType;
+        set => OverrideParameterType = value;
+    }
 
     public ParameterAnalysisContext(Il2CppParameterDefinition? definition, int parameterIndex, MethodAnalysisContext declaringMethod) : base(definition?.token ?? 0, declaringMethod.AppContext)
     {
@@ -74,7 +82,7 @@ public class ParameterAnalysisContext : HasCustomAttributesAndName, IParameterIn
 
             if (Attributes.HasFlag(ParameterAttributes.HasDefault))
             {
-                DefaultValue = AppContext.Metadata.GetParameterDefaultValueFromIndex(declaringMethod.Definition!.parameterStart + parameterIndex)!;
+                DefaultValue = AppContext.Metadata.GetParameterDefaultValueFromIndex(Il2CppVariableWidthIndex<Il2CppParameterDefinition>.MakeTemporaryForFixedWidthUsage(declaringMethod.Definition!.parameterStart.Value + parameterIndex))!;
             }
         }
     }

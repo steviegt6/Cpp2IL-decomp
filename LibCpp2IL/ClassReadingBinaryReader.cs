@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading;
+using LibCpp2IL.Metadata;
 
 namespace LibCpp2IL;
 
@@ -243,6 +244,29 @@ public abstract class ClassReadingBinaryReader : EndianAwareBinaryReader
             ReleaseLock();
         }
     }
+    
+    public Il2CppVariableWidthIndex<T>[] ReadIndexArrayAtRawAddress<T>(long offset, long count) where T : ReadableClass
+    {
+        var t = new Il2CppVariableWidthIndex<T>[count];
+
+        GetLockOrThrow();
+
+        try
+        {
+            if (offset != -1) Position = offset;
+
+            for (var i = 0; i < count; i++)
+            {
+                t[i] = Il2CppVariableWidthIndex<T>.Read(this);
+            }
+
+            return t;
+        }
+        finally
+        {
+            ReleaseLock();
+        }
+    }
 
     public string ReadStringToNull(ulong offset) => ReadStringToNull((long)offset);
 
@@ -423,8 +447,8 @@ public abstract class ClassReadingBinaryReader : EndianAwareBinaryReader
                 rawBytes = BitConverter.GetBytes(word);
             }
 
-            if (ShouldReverseArrays)
-                rawBytes = rawBytes.Reverse();
+            if (BitConverter.IsLittleEndian != IsLittleEndian)
+                Array.Reverse(rawBytes);
 
             if (position > _memoryStream.Length)
                 throw new Exception($"WriteWord: Position {position} beyond length {_memoryStream.Length}");

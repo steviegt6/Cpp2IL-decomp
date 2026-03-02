@@ -31,7 +31,11 @@ public static class AsmResolverAssemblyPopulator
             PopulateGenericParamsForType(typeCtx, typeDefinition);
 
             //Set base type
-            typeDefinition.BaseType = typeCtx.BaseType?.ToTypeSignature(typeDefinition.DeclaringModule!).ToTypeDefOrRef();
+            if(asmCtx.AppContext.MetadataVersion >= 35 && typeCtx is {Definition.IsEnumType: true })
+                //v35 restructures this a bit so that enums now directly inherit from their primitive type, so we need to explicitly set this to enum
+                typeDefinition.BaseType = typeCtx.AppContext.SystemTypes.EnumType.ToTypeSignature(typeDefinition.DeclaringModule!).ToTypeDefOrRef();
+            else
+                typeDefinition.BaseType = typeCtx.BaseType?.ToTypeSignature(typeDefinition.DeclaringModule!).ToTypeDefOrRef();
 
             //Set interfaces
             foreach (var interfaceType in typeCtx.InterfaceContexts)
@@ -379,7 +383,7 @@ public static class AsmResolverAssemblyPopulator
 
                 if (defaultValueData?.ContainedDefaultValue is { } constVal)
                     parameterDefinitions[i].Constant = AsmResolverConstants.GetOrCreateConstant(constVal);
-                else if (defaultValueData is { dataIndex: -1 })
+                else if (defaultValueData is { dataIndex.IsNull: true })
                 {
                     //Literal null
                     parameterDefinitions[i].Constant = AsmResolverConstants.Null;
@@ -496,6 +500,7 @@ public static class AsmResolverAssemblyPopulator
     public static void AddExplicitInterfaceImplementations(AssemblyAnalysisContext asmContext)
     {
         var managedAssembly = asmContext.GetExtraData<AssemblyDefinition>("AsmResolverAssembly") ?? throw new("AsmResolver assembly not found in assembly analysis context for " + asmContext);
+        var runtimeContext = asmContext.AppContext.GetExtraData<RuntimeContext>("AsmResolverRuntimeContext") ?? throw new("AsmResolver runtime context not found in application analysis context");
 
         var importer = managedAssembly.ManifestModule!.DefaultImporter;
 
@@ -510,7 +515,7 @@ public static class AsmResolverAssemblyPopulator
             try
 #endif
             {
-                AddExplicitInterfaceImplementations(managedType, typeContext, importer);
+                AddExplicitInterfaceImplementations(managedType, typeContext, importer, runtimeContext);
             }
 #if !DEBUG
             catch (Exception e)
@@ -521,7 +526,7 @@ public static class AsmResolverAssemblyPopulator
         }
     }
 
-    private static void AddExplicitInterfaceImplementations(TypeDefinition type, TypeAnalysisContext typeContext, ReferenceImporter importer)
+    private static void AddExplicitInterfaceImplementations(TypeDefinition type, TypeAnalysisContext typeContext, ReferenceImporter importer, RuntimeContext runtimeContext)
     {
         List<(PropertyDefinition InterfaceProperty, TypeSignature InterfaceType, MethodDefinition Method)>? getMethodsToCreate = null;
         List<(PropertyDefinition InterfaceProperty, TypeSignature InterfaceType, MethodDefinition Method)>? setMethodsToCreate = null;
@@ -533,26 +538,23 @@ public static class AsmResolverAssemblyPopulator
 
             foreach (var overrideContext in methodContext.Overrides)
             {
-                if (overrideContext.DeclaringType?.IsInterface ?? false)
+                var interfaceMethod = (IMethodDefOrRef)overrideContext.ToMethodDescriptor(importer.TargetModule);
+                var method = methodContext.GetExtraData<MethodDefinition>("AsmResolverMethod") ?? throw new($"AsmResolver method not found in method analysis context for {methodContext}");
+                type.MethodImplementations.Add(new MethodImplementation(interfaceMethod, method));
+                var resolutionStatus = interfaceMethod.Resolve(runtimeContext, out var interfaceMethodResolved);
+                if (resolutionStatus == ResolutionStatus.Success && interfaceMethodResolved != null)
                 {
-                    var interfaceMethod = (IMethodDefOrRef)overrideContext.ToMethodDescriptor(importer.TargetModule);
-                    var method = methodContext.GetExtraData<MethodDefinition>("AsmResolverMethod") ?? throw new($"AsmResolver method not found in method analysis context for {methodContext}");
-                    type.MethodImplementations.Add(new MethodImplementation(interfaceMethod, method));
-                    var interfaceMethodResolved = interfaceMethod.Resolve();
-                    if (interfaceMethodResolved != null)
+                    if (interfaceMethodResolved.IsGetMethod && !method.IsGetMethod)
                     {
-                        if (interfaceMethodResolved.IsGetMethod && !method.IsGetMethod)
-                        {
-                            getMethodsToCreate ??= [];
-                            var interfacePropertyResolved = interfaceMethodResolved.DeclaringType!.Properties.First(p => p.Semantics.Contains(interfaceMethodResolved.Semantics));
-                            getMethodsToCreate.Add((interfacePropertyResolved, interfaceMethod.DeclaringType!.ToTypeSignature(), method));
-                        }
-                        else if (interfaceMethodResolved.IsSetMethod && !method.IsSetMethod)
-                        {
-                            setMethodsToCreate ??= [];
-                            var interfacePropertyResolved = interfaceMethodResolved.DeclaringType!.Properties.First(p => p.Semantics.Contains(interfaceMethodResolved.Semantics));
-                            setMethodsToCreate.Add((interfacePropertyResolved, interfaceMethod.DeclaringType!.ToTypeSignature(), method));
-                        }
+                        getMethodsToCreate ??= [];
+                        var interfacePropertyResolved = interfaceMethodResolved.DeclaringType!.Properties.First(p => p.Semantics.Contains(interfaceMethodResolved.Semantics));
+                        getMethodsToCreate.Add((interfacePropertyResolved, interfaceMethod.DeclaringType!.ToTypeSignature(runtimeContext), method));
+                    }
+                    else if (interfaceMethodResolved.IsSetMethod && !method.IsSetMethod)
+                    {
+                        setMethodsToCreate ??= [];
+                        var interfacePropertyResolved = interfaceMethodResolved.DeclaringType!.Properties.First(p => p.Semantics.Contains(interfaceMethodResolved.Semantics));
+                        setMethodsToCreate.Add((interfacePropertyResolved, interfaceMethod.DeclaringType!.ToTypeSignature(runtimeContext), method));
                     }
                 }
             }
@@ -565,7 +567,7 @@ public static class AsmResolverAssemblyPopulator
             {
                 var (interfaceProperty, interfaceType, getMethod) = entry;
                 var setMethod = setMethodsToCreate?
-                    .FirstOrDefault(e => e.InterfaceProperty == interfaceProperty && SignatureComparer.Default.Equals(e.InterfaceType, interfaceType))
+                    .FirstOrDefault(e => e.InterfaceProperty == interfaceProperty && runtimeContext.SignatureComparer.Equals(e.InterfaceType, interfaceType))
                     .Method;
 
                 var name = $"{interfaceType.FullName}.{interfaceProperty.Name}";
@@ -582,7 +584,7 @@ public static class AsmResolverAssemblyPopulator
             foreach (var entry in setMethodsToCreate)
             {
                 var (interfaceProperty, interfaceType, setMethod) = entry;
-                if (getMethodsToCreate?.Any(e => e.InterfaceProperty == interfaceProperty && SignatureComparer.Default.Equals(e.InterfaceType, interfaceType)) == true)
+                if (getMethodsToCreate?.Any(e => e.InterfaceProperty == interfaceProperty && runtimeContext.SignatureComparer.Equals(e.InterfaceType, interfaceType)) == true)
                     continue;
                 var name = $"{interfaceType.FullName}.{interfaceProperty.Name}";
                 var propertySignature = setMethod.IsStatic
