@@ -20,6 +20,8 @@ namespace Cpp2IL.Core.OutputFormats;
 
 public abstract class AsmResolverDllOutputFormat : Cpp2IlOutputFormat
 {
+    protected RuntimeContext? RuntimeContext { get; private set; }
+
     private AssemblyDefinition? MostRecentCorLib { get; set; }
     protected int TotalMethodCount;
     protected int SuccessfulMethodCount;
@@ -159,15 +161,15 @@ public abstract class AsmResolverDllOutputFormat : Cpp2IlOutputFormat
         MostRecentCorLib = BuildStubAssembly(corlib, null, null);
 
         // The runtime info is irrelevant because we're creating our own corlib, but AsmResolver still requires that we specify one.
-        var runtimeContext = new RuntimeContext(DotNetRuntimeInfo.NetCoreApp(9, 0), (bool?)null, MostRecentCorLib);
-        runtimeContext.AddAssembly(MostRecentCorLib);
+        RuntimeContext = new RuntimeContext(DotNetRuntimeInfo.NetCoreApp(9, 0), (bool?)null, MostRecentCorLib);
+        RuntimeContext.AddAssembly(MostRecentCorLib);
 
-        context.PutExtraData("AsmResolverRuntimeContext", runtimeContext);
+        context.PutExtraData("AsmResolverRuntimeContext", RuntimeContext);
 
         var ret = context.Assemblies
             // .AsParallel()
             .Where(a => a.Name != "mscorlib")
-            .Select(a => BuildStubAssembly(a, MostRecentCorLib, runtimeContext))
+            .Select(a => BuildStubAssembly(a, MostRecentCorLib, RuntimeContext))
             .ToList();
 
         ret.Add(MostRecentCorLib);

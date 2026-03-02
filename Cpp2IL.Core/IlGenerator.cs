@@ -13,7 +13,7 @@ namespace Cpp2IL.Core;
 
 public static class IlGenerator
 {
-    public static void GenerateIl(MethodAnalysisContext context, MethodDefinition definition)
+    public static void GenerateIl(MethodAnalysisContext context, MethodDefinition definition, RuntimeContext runtimeContext)
     {
         var assembly = context.DeclaringType!.DeclaringAssembly;
         var module = definition.DeclaringModule!;
@@ -27,7 +27,7 @@ public static class IlGenerator
 
         var stringType = factory.CorLibScope.CreateTypeReference("System", "String");
         var stringCtor = stringType
-            .CreateMemberReference(".ctor", MethodSignature.CreateStatic(stringType.ToTypeSignature(), factory.String))
+            .CreateMemberReference(".ctor", MethodSignature.CreateStatic(stringType.ToTypeSignature(isValueType: false), factory.String))
             .ImportWith(importer);
 
         // Change branch targets to instructions
@@ -94,7 +94,7 @@ public static class IlGenerator
         // Generate IL
         Dictionary<Instruction, List<CilInstruction>> instructionMap = [];
         foreach (var instruction in context.ControlFlowGraph!.Instructions) // context.ConvertedIsil is probably not up to date anymore here
-            instructionMap.Add(instruction, GenerateInstructions(instruction, context, definition, locals, writeLine, stringCtor));
+            instructionMap.Add(instruction, GenerateInstructions(instruction, context, definition, locals, writeLine, stringCtor, runtimeContext));
 
         // Set IL branch targets
         foreach (var kvp in instructionMap)
@@ -138,7 +138,7 @@ public static class IlGenerator
     }
 
     private static List<CilInstruction> GenerateInstructions(Instruction instruction, MethodAnalysisContext context,
-        MethodDefinition method, Dictionary<LocalVariable, CilLocalVariable> locals, MemberReference writeLine, MemberReference stringCtor)
+        MethodDefinition method, Dictionary<LocalVariable, CilLocalVariable> locals, MemberReference writeLine, MemberReference stringCtor, RuntimeContext runtimeContext)
     {
         var body = method.CilMethodBody!;
         var instructions = body.Instructions;
@@ -176,12 +176,12 @@ public static class IlGenerator
                     else
                         instructions.Add(CilOpCodes.Ldloc, locals[field.Local]);
 
-                    LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor);
+                    LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor, runtimeContext);
                     instructions.Add(CilOpCodes.Stfld, field.Field.ToFieldDescriptor(module));
                     break;
                 }
 
-                LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor);
+                LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor, runtimeContext);
                 StoreToOperand(instruction.Operands[0], method, locals, writeLine);
                 break;
 
@@ -204,14 +204,14 @@ public static class IlGenerator
                 }
 
                 var importedMethod = importer.ImportMethod(targetMethod.ToMethodDescriptor(module));
-                var resolvedMethod = importedMethod.Resolve()!;
+                var resolvedMethod = importedMethod.Resolve(runtimeContext)!;
 
                 var thisParamIndex = instruction.OpCode == OpCode.Call ? 2 : 1;
 
                 if (!resolvedMethod.IsStatic) // Load 'this' param
                 {
                     if ((instruction.Operands.Count - 1) >= thisParamIndex)
-                        LoadOperand(instruction.Operands[thisParamIndex], method, locals, writeLine, stringCtor);
+                        LoadOperand(instruction.Operands[thisParamIndex], method, locals, writeLine, stringCtor, runtimeContext);
                     else
                         instructions.Add(CilOpCodes.Ldstr, $"Non static method called without 'this' param ({instruction})");
                 }
@@ -219,7 +219,7 @@ public static class IlGenerator
                 // Load normal params
                 var callParams = instruction.Operands.Skip(thisParamIndex + (resolvedMethod.IsStatic ? 0 : -1));
                 foreach (var param in callParams)
-                    LoadOperand(param, method, locals, writeLine, stringCtor);
+                    LoadOperand(param, method, locals, writeLine, stringCtor, runtimeContext);
 
                 instructions.Add(CilOpCodes.Call, importedMethod);
 
@@ -235,7 +235,7 @@ public static class IlGenerator
 
             case OpCode.Return:
                 if (!context.IsVoid && instruction.Operands.Count == 1)
-                    LoadOperand(instruction.Operands[0], method, locals, writeLine, stringCtor);
+                    LoadOperand(instruction.Operands[0], method, locals, writeLine, stringCtor, runtimeContext);
                 instructions.Add(CilOpCodes.Ret);
                 break;
 
@@ -244,7 +244,7 @@ public static class IlGenerator
                 break;
 
             case OpCode.ConditionalJump:
-                LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor);
+                LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor, runtimeContext);
                 instructions.Add(CilOpCodes.Brtrue, new CilInstructionLabel());
                 break;
 
@@ -273,8 +273,8 @@ public static class IlGenerator
             case OpCode.And:
             case OpCode.Or:
             case OpCode.Xor:
-                LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor);
-                LoadOperand(instruction.Operands[2], method, locals, writeLine, stringCtor);
+                LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor, runtimeContext);
+                LoadOperand(instruction.Operands[2], method, locals, writeLine, stringCtor, runtimeContext);
 
                 switch (instruction.OpCode)
                 {
@@ -300,7 +300,7 @@ public static class IlGenerator
 
             case OpCode.Not:
             case OpCode.Negate:
-                LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor);
+                LoadOperand(instruction.Operands[1], method, locals, writeLine, stringCtor, runtimeContext);
 
                 switch (instruction.OpCode)
                 {
@@ -321,7 +321,7 @@ public static class IlGenerator
     }
 
     private static void LoadOperand(object operand, MethodDefinition method,
-        Dictionary<LocalVariable, CilLocalVariable> locals, MemberReference writeLine, MemberReference stringCtor)
+        Dictionary<LocalVariable, CilLocalVariable> locals, MemberReference writeLine, MemberReference stringCtor, RuntimeContext runtimeContext)
     {
         var instructions = method.CilMethodBody!.Instructions;
 
@@ -401,7 +401,7 @@ public static class IlGenerator
                     break;
                 }
 
-                var cilType = type.ToTypeSignature(module!).Resolve()!;
+                var cilType = type.ToTypeSignature(module!).Resolve(runtimeContext)!;
 
                 // Try to first get constructor without params
                 var constructor = cilType.Methods.FirstOrDefault(m => m.ParameterDefinitions.Count == 0 && m.Name == ".ctor" || m.Name == ".cctor");

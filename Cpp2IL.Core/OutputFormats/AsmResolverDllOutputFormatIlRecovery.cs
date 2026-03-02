@@ -55,7 +55,7 @@ public class AsmResolverDllOutputFormatIlRecovery : AsmResolverDllOutputFormat
             if (methodContext.ConvertedIsil.Count == 0)
                 methodDefinition.ReplaceMethodBodyWithMinimalImplementation();
             else
-                IlGenerator.GenerateIl(methodContext, methodDefinition);
+                IlGenerator.GenerateIl(methodContext, methodDefinition, RuntimeContext);
 
             //WriteControlFlowGraph(methodContext, Path.Combine(Environment.CurrentDirectory, "Cpp2IL", "bin", "Debug", "net9.0", "cpp2il_out", "cfg"));
 
@@ -78,7 +78,7 @@ public class AsmResolverDllOutputFormatIlRecovery : AsmResolverDllOutputFormat
     {
         var module = method.DeclaringModule!;
         var mscorlibReference = module.AssemblyReferences.First(a => a.Name == "mscorlib");
-        var mscorlib = mscorlibReference.Resolve()!.Modules[0];
+        var mscorlib = mscorlibReference.Resolve(RuntimeContext)!.Modules[0];
 
         var exception = mscorlib.TopLevelTypes.First(t => t.FullName == "System.Exception");
         _exceptionConstructor = exception.Methods.First(m =>
