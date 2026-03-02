@@ -279,8 +279,16 @@ public static class LocalVariables
             // 'this' param
             if (!calledMethod.IsStatic)
             {
-                if (instruction.Operands[instruction.OpCode == OpCode.CallVoid ? 1 : 2] is LocalVariable thisParam)
-                    thisParam.Type = calledMethod.DeclaringType;
+                var thisIdx = instruction.OpCode == OpCode.CallVoid ? 1 : 2;
+                if (instruction.Operands.Count > thisIdx)
+                {
+                    if (instruction.Operands[thisIdx] is LocalVariable thisParam)
+                        thisParam.Type = calledMethod.DeclaringType;   
+                }
+                else
+                {
+                    method.AddWarning($"'this' parameter not found in call to {calledMethod.Name}");
+                }
             }
 
             // Set types
