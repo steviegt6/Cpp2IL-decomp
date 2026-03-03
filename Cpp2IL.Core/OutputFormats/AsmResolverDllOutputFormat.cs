@@ -8,7 +8,9 @@ using System.Threading.Tasks;
 using AsmResolver.DotNet;
 using AsmResolver.DotNet.Builder;
 using AsmResolver.PE.Builder;
+using AsmResolver.PE.DotNet.Cil;
 using AsmResolver.PE.DotNet.Metadata.Tables;
+using AssetRipper.CIL;
 using Cpp2IL.Core.Api;
 using Cpp2IL.Core.Logging;
 using Cpp2IL.Core.Model.Contexts;
@@ -38,9 +40,9 @@ public abstract class AsmResolverDllOutputFormat : Cpp2IlOutputFormat
 
         //Convert assembly definitions to PE files
         var peImagesToWrite = ret
-            .AsParallel()
-            .Select(a => (image: a.ManifestModule!.ToPEImage(new ManagedPEImageBuilder()), name: a.ManifestModule.Name!))
-            .ToList();
+                             .AsParallel()
+                             .Select(a => (image: a.ManifestModule!.ToPEImage(new ManagedPEImageBuilder(), throwOnNonFatalError: false), name: a.ManifestModule.Name!))
+                             .ToList();
 
         Logger.VerboseNewline($"{(DateTime.Now - start).TotalMilliseconds:F1}ms", "DllOutput");
 
@@ -116,7 +118,14 @@ public abstract class AsmResolverDllOutputFormat : Cpp2IlOutputFormat
         //Fill method bodies - this should always be done last
         start = DateTime.Now;
         Logger.Verbose($"Filling method bodies (in parallel)...", "DllOutput");
-        MiscUtils.ExecuteParallel(context.Assemblies, FillMethodBodies);
+        try
+        {
+            MiscUtils.ExecuteParallel(context.Assemblies, FillMethodBodies);
+        }
+        catch (Exception e)
+        {
+            Logger.ErrorNewline($"Encountered errors during method body filling, attempting to continue: {e}");
+        }
 
         Logger.VerboseNewline($"{(DateTime.Now - start).TotalMilliseconds:F1}ms", "DllOutput");
 
@@ -129,10 +138,20 @@ public abstract class AsmResolverDllOutputFormat : Cpp2IlOutputFormat
 
     protected virtual void FillMethodBodies(AssemblyAnalysisContext context)
     {
+        var i = 0;
         foreach (var typeContext in context.Types)
         {
+            i++;
             if (AsmResolverAssemblyPopulator.IsTypeContextModule(typeContext))
                 continue;
+
+            Logger.InfoNewline($"Handling type: {typeContext.FullName} ({i}/{context.Types.Count})");
+
+            var stubMethods = typeContext.FullName is "Terraria.Collision" or "Terraria.WorldGen";
+            if (stubMethods)
+            {
+                Logger.WarnNewline($"Skipping bad type: {typeContext.FullName}");
+            }
 
 #if !DEBUG
             try
@@ -142,7 +161,20 @@ public abstract class AsmResolverDllOutputFormat : Cpp2IlOutputFormat
                 {
                     var managedMethod = methodCtx.GetExtraData<MethodDefinition>("AsmResolverMethod") ?? throw new($"AsmResolver method not found in method analysis context for {typeContext.FullName}.{methodCtx.Name}");
 
-                    FillMethodBody(managedMethod, methodCtx);
+                    if (stubMethods)
+                    {
+                        if (managedMethod.IsManagedMethodWithBody())
+                        {
+                            managedMethod.CilMethodBody = new();
+                            var instructions = managedMethod.CilMethodBody.Instructions;
+                            instructions.Add(CilOpCodes.Ldnull);
+                            instructions.Add(CilOpCodes.Throw);
+                        }
+                    }
+                    else
+                    {
+                        FillMethodBody(managedMethod, methodCtx);
+                    }
                 }
             }
 #if !DEBUG
@@ -167,10 +199,10 @@ public abstract class AsmResolverDllOutputFormat : Cpp2IlOutputFormat
         context.PutExtraData("AsmResolverRuntimeContext", RuntimeContext);
 
         var ret = context.Assemblies
-            // .AsParallel()
-            .Where(a => a.Name != "mscorlib")
-            .Select(a => BuildStubAssembly(a, MostRecentCorLib, RuntimeContext))
-            .ToList();
+                          // .AsParallel()
+                         .Where(a => a.Name != "mscorlib")
+                         .Select(a => BuildStubAssembly(a, MostRecentCorLib, RuntimeContext))
+                         .ToList();
 
         ret.Add(MostRecentCorLib);
         return ret;
@@ -182,10 +214,7 @@ public abstract class AsmResolverDllOutputFormat : Cpp2IlOutputFormat
         //Build an AsmResolver assembly from this definition
         var ourAssembly = new AssemblyDefinition(assemblyContext.Name, assemblyContext.Version)
         {
-            HashAlgorithm = (AssemblyHashAlgorithm)assemblyContext.HashAlgorithm,
-            Attributes = (AssemblyAttributes)assemblyContext.Flags,
-            Culture = assemblyContext.Culture,
-            PublicKey = assemblyContext.PublicKey,
+            HashAlgorithm = (AssemblyHashAlgorithm)assemblyContext.HashAlgorithm, Attributes = (AssemblyAttributes)assemblyContext.Flags, Culture = assemblyContext.Culture, PublicKey = assemblyContext.PublicKey,
         };
 
         //Setting the corlib module allows element types in references to that assembly to be set correctly without us having to manually set them.
